@@ -25,7 +25,6 @@ func TestPutAndGet(t *testing.T) {
 	m := hopmap.New[Key, uint32](hopmap.Config{
 		Size:       1 << 12,
 		BucketSize: 32,
-		AutoResize: false,
 	})
 
 	keys := make([]Key, 0)

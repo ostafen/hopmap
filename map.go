@@ -11,15 +11,13 @@ type Hashable[K any] interface {
 }
 
 type Config struct {
-	Size, BucketSize uint32
-	AutoResize       bool
+	Size, BucketSize int
 }
 
 func DefaultConfig() Config {
 	return Config{
 		Size:       1 << 16,
 		BucketSize: 32,
-		AutoResize: true,
 	}
 }
 
@@ -32,7 +30,7 @@ type Map[K Hashable[K], V any] struct {
 	config    Config
 	entries   []*entry[K, V]
 	neighbors []uint32
-	n         int
+	size, n   int
 }
 
 func New[K Hashable[K], V any](c Config) *Map[K, V] {
@@ -40,6 +38,7 @@ func New[K Hashable[K], V any](c Config) *Map[K, V] {
 		config:    c,
 		entries:   make([]*entry[K, V], c.Size),
 		neighbors: make([]uint32, c.Size),
+		size:      c.Size,
 		n:         0,
 	}
 }
@@ -62,7 +61,7 @@ func (m *Map[K, V]) findEntry(hash uint32, key K) int {
 	neighbors := m.neighbors[hash]
 
 	zeros := bits.LeadingZeros32(neighbors)
-	i := mod(int(hash)+zeros, int(m.config.Size))
+	i := mod(int(hash)+zeros, m.size)
 
 	for neighbors != 0 {
 		if e := m.entries[i]; e.key.Equals(key) {
@@ -71,22 +70,21 @@ func (m *Map[K, V]) findEntry(hash uint32, key K) int {
 
 		neighbors <<= (zeros + 1)
 		zeros = bits.LeadingZeros32(neighbors)
-		i = mod(i+int(zeros+1), int(m.config.Size))
+		i = mod(i+int(zeros+1), m.size)
 	}
 	return -1
 }
 
 func (m *Map[K, V]) hashKey(key K) uint32 {
-	return key.HashCode() % m.config.Size
+	return key.HashCode() % uint32(m.size)
 }
 
 func (m *Map[K, V]) nextHash(hash uint32) uint32 {
-	return uint32(mod(int(hash+1), int(m.config.Size)))
+	return uint32(mod(int(hash+1), m.size))
 }
 
 const (
-	allBitSet      = 0xFFFFFFFF
-	leadingBitZero = 0x7FFFFFFF
+	allBitSet = 0xFFFFFFFF
 )
 
 func mod(n, m int) int {
@@ -107,7 +105,7 @@ func (m *Map[K, V]) Put(key K, value V) bool {
 
 	emptySlot := m.findEmptySlot(hash)
 	if emptySlot < 0 || m.neighbors[emptySlot] == allBitSet {
-		return false // TODO: if m.conf.AutoResize is set, grow the table
+		return false
 	}
 
 	i := int(hash)
@@ -124,13 +122,13 @@ func (m *Map[K, V]) Put(key K, value V) bool {
 }
 
 func (m *Map[K, V]) shiftEmptySlotTo(i, j int) (int, int) {
-	dist := mod(j-i, int(m.config.Size))
+	dist := mod(j-i, m.size)
 	for dist >= int(m.config.BucketSize) {
 		j = m.reshift(j)
 		if j < 0 {
 			return j, dist
 		}
-		dist = mod(j-i, int(m.config.Size))
+		dist = mod(j-i, m.size)
 	}
 	return j, dist
 }
@@ -162,20 +160,20 @@ func (m *Map[_, _]) reshift(j int) int {
 
 // findNearestItem searches for an item whose hash value is between H-1 of j.
 func (m *Map[K, V]) findNearestItem(j int) int {
-	k := mod(j-1, int(m.config.Size))
-	maxDist := mod(j-k, int(m.config.Size))
-	for maxDist < int(m.config.BucketSize) {
+	k := mod(j-1, m.size)
+	maxDist := mod(j-k, m.size)
+	for maxDist < m.config.BucketSize {
 		if dist := bits.LeadingZeros32(m.neighbors[k]); dist <= maxDist {
 
 			// TODO: should move this outsize
 			m.clearNeighbor(k, dist)
 			m.setNeighbor(k, maxDist)
 
-			return mod(k+dist, int(m.config.Size))
+			return mod(k+dist, m.size)
 		}
 
-		k = mod(k-1, int(m.config.Size))
-		maxDist = mod(j-k, int(m.config.Size))
+		k = mod(k-1, m.size)
+		maxDist = mod(j-k, m.size)
 	}
 	return -1
 }
@@ -192,7 +190,7 @@ func (m *Map[K, V]) Delete(key K) (V, bool) {
 	hash := m.hashKey(key)
 
 	if e := m.findEntry(hash, key); e >= 0 {
-		m.clearNeighbor(int(hash), mod(e-int(hash), int(m.config.Size)))
+		m.clearNeighbor(int(hash), mod(e-int(hash), m.size))
 
 		value := m.entries[e].value
 		m.resetEntry(m.entries[e])
@@ -213,7 +211,7 @@ func (m *Map[_, _]) Len() int {
 }
 
 func (m *Map[_, _]) Size() int {
-	return int(m.config.Size)
+	return m.size
 }
 
 func (m *Map[_, _]) Load() float64 {
